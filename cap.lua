@@ -1,9 +1,9 @@
 -- Notas desarrollo: 
--- Intentar sacar los eventos de land y muerto por fuera cada método, si hago esto toca actualizar cleandUP e init
 -- Agregar FSM - Finite State Machine
 -- Agregar calculo de altura aleatoria
 -- Agregar distancia de engagement 
 -- Agregar lógica para tanquer
+-- agregar sorties en vez de vidas para evento land
 -- Customizar Aquí:
 local simpleCapGroups = {{
     name = "cap1",
@@ -46,8 +46,8 @@ local function debug_msg(msg, duration)
     trigger.action.outText(msg, duration) -- Mensaje de depuración para todas las coaliciones y espectadores
 end
 
--- Define las funciones de los manejadores de eventos fuera del constructor
-local eventHandlers = {}
+-- Tabla para guardar las instancias que se van creando
+local simpleCapInstances = {}
 
 simpleCap = {
     state = {
@@ -77,6 +77,7 @@ function simpleCap:new(group)
         debug = group.debug
     }
     setmetatable(newCapGroup, simpleCap_mt)
+    simpleCapInstances[group.name] = newCapGroup -- Almacena la instancia en simpleCapInstances para poder acceder en los eventHandler
     newCapGroup:Init()
     return newCapGroup
 end
@@ -86,39 +87,6 @@ function simpleCap:Init()
     if self.debug then
         debug_msg("SimpleCap ejecutándose para grupo: " .. self.name)
     end
-    -- Función anónima o closure para poder pasar el parámetro self.name al handler de landing
-    local function landingEventHandler(event)
-        if event.id == world.event.S_EVENT_LAND then
-            if self.debug then
-                debug_msg("Se produjo un eveto LAND chequeando si se trata de " .. self.name)
-            end
-            self:handleLandingEvent(event)
-        end
-    end
-
-    -- Función anónima o closure para poder pasar el parámetro self.name al handler de dead
-    local function deadEventHandler(event)
-        if (event.id == world.event.S_EVENT_CRASH or event.id == world.event.S_EVENT_DEAD or event.id ==
-            world.event.S_EVENT_UNIT_LOST) and event.initiator ~= nil and not self.state.awaiting_respawn then
-            if self.debug then
-                debug_msg("Se produjo un eveto CRASH - DEAD - UNIT_LOST chequeando si se trata de " .. self.name)
-            end
-            local deadUnitGroup = event.initiator:getGroup():getName()
-            -- Verificar si la unidad que se estrelló o murió pertener al grupo de cap
-            if self.name == deadUnitGroup then
-                self:handleRespawn()
-            end
-        end
-    end
-
-    -- Agregar manejadores de eventos si no existen a una tabla eventHandlers fuera de la instancia y constructor para que sea accesible fuera de métodos
-    if not eventHandlers[self.name] then
-        eventHandlers[self.name] = {
-            landing = mist.addEventHandler(landingEventHandler),
-            dead = mist.addEventHandler(deadEventHandler)
-        }
-    end
-
     local groupName = Group.getByName(self.name)
     if groupName then
         local units = groupName:getUnits()
@@ -362,36 +330,14 @@ function simpleCap:capDifficultyConfig()
 
 end
 
--- Método para manejar el evento de aterrizaje y eliminar la unidad
-function simpleCap:handleLandingEvent(event)
-    if event.id == world.event.S_EVENT_LAND then
-        local landedUnitGroup = event.initiator:getGroup():getName()
-        -- Verificar si el grupo que aterrizó es el grupo de cap
-        if self.name == landedUnitGroup then
-            local unit = event.initiator -- Obtener la unidad que aterrizó
-            unit:destroy()
-            if self.debug then
-                debug_msg("Unidad Eliminada luego de aterrizaje del grupo " .. landedUnitGroup)
-            end
-            self:handleRespawn()
-        end
-    end
-end
-
 -- Método para limpiar ejecución luego de que self.state.logic_ended = true
 function simpleCap:cleanUp()
     if self.debug then
         debug_msg("Corriendo cleanUP para: " .. self.name)
     end
     if self.state.logic_ended then
-        if eventHandlers[self.name] then
-            mist.removeEventHandler(eventHandlers[self.name].landing)
-            mist.removeEventHandler(eventHandlers[self.name].dead)
-            eventHandlers[self.name] = nil
-            if self.debug then
-                debug_msg("Event Handlers eliminados para " .. self.name)
-            end
-        end
+        simpleCapInstances[self.name] = nil
+        debug_msg("Instancia eliminada para " .. self.name)
     end
     if self.debug then
         debug_msg("CleanUP finalizado para " .. self.name)
@@ -487,9 +433,48 @@ function simpleCap:maxEfficiencySpeed(altitude)
     return speed -- conversión de mach a m/s (1 mach = 340.29 m/s)
 end
 
+--- FUNCIONES GENERALES FUERA DE MÉTODOS DE clase
+
+-- Funcion para manejar el evento de aterrizaje y eliminar la unidad
+local function landingEventHandler(event)
+    if event.id == world.event.S_EVENT_LAND then
+        debug_msg("Se produjo un evento LAND, verificando...")
+        local landedUnitGroup = event.initiator:getGroup():getName()
+        -- Verificar si el grupo que aterrizó es el grupo de cap
+        local instance = simpleCapInstances[landedUnitGroup]
+        if instance then
+            local unit = event.initiator -- Obtener la unidad que aterrizó
+            unit:destroy()
+            if instance.debug then
+                debug_msg("Unidad eliminada después de aterrizaje del grupo " .. instance.name)
+            end
+            instance:handleRespawn()
+        end
+    end
+end
+
+-- Función para detectar un evento de muerto, crash o unit lost
+local function deadEventHandler(event)
+    if (event.id == world.event.S_EVENT_CRASH or event.id == world.event.S_EVENT_DEAD or event.id ==
+        world.event.S_EVENT_UNIT_LOST) and event.initiator ~= nil then
+        local deadUnitGroup = event.initiator:getGroup():getName()
+        local instance = simpleCapInstances[deadUnitGroup]
+        -- Verificar si la unidad que se estrelló o murió pertener al grupo de cap
+        if instance and not instance.state.awaiting_respawn then
+            if instance.debug then
+                debug_msg("Se produjo un eveto CRASH - DEAD - UNIT_LOST para " .. instance.name ..
+                              " se ejecuta función de respawn")
+            end
+            instance:handleRespawn()
+        end
+    end
+end
+
 -- Función para inicializar y ejecutar el script
 function initializeScript()
     debug_msg("Inicializando SimpleCap by Mono")
+    mist.addEventHandler(landingEventHandler)
+    mist.addEventHandler(deadEventHandler)
     for _, groupData in ipairs(simpleCapGroups) do
         local capInstance = simpleCap:new(groupData)
     end
