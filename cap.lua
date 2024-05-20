@@ -1,6 +1,9 @@
 -- Notas desarrollo: 
 -- Intentar sacar los eventos de land y muerto por fuera cada método, si hago esto toca actualizar cleandUP e init
 -- Agregar FSM - Finite State Machine
+-- Agregar calculo de altura aleatoria
+-- Agregar distancia de engagement 
+-- Agregar lógica para tanquer
 -- Customizar Aquí:
 local simpleCapGroups = {{
     name = "cap1",
