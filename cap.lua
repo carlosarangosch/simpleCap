@@ -1,6 +1,5 @@
 -- Notas desarrollo: 
 -- Agregar FSM - Finite State Machine
--- Agregar calculo de altura aleatoria
 -- Agregar distancia de engagement 
 -- Agregar lógica para tanquer
 -- agregar sorties en vez de vidas para evento land
@@ -11,9 +10,8 @@ local simpleCapGroups = {{
     difficulty = "easy",
     airbone = true,
     extraLives = 1,
-    minAlt = 10000,
+    minAlt = 5000,
     maxAlt = 10000,
-    capAlt = 10000,
     debug = true
 }, {
     name = "cap2",
@@ -21,9 +19,8 @@ local simpleCapGroups = {{
     difficulty = "passive",
     airbone = true,
     extraLives = 1,
-    minAlt = 10000,
+    minAlt = 9000,
     maxAlt = 10000,
-    capAlt = 10000,
     debug = true
 }, {
     name = "cap3",
@@ -31,9 +28,8 @@ local simpleCapGroups = {{
     difficulty = "hard",
     airbone = false,
     extraLives = -1,
-    minAlt = 25000,
+    minAlt = 20000,
     maxAlt = 25000,
-    capAlt = 25000,
     debug = true
 }}
 
@@ -73,7 +69,6 @@ function simpleCap:new(group)
         extraLives = group.extraLives,
         minAlt = group.minAlt,
         maxAlt = group.maxAlt,
-        capAlt = group.capAlt,
         debug = group.debug
     }
     setmetatable(newCapGroup, simpleCap_mt)
@@ -97,9 +92,11 @@ function simpleCap:Init()
                 trigger.action.activateGroup(groupName)
             end
 
+            -- Definimos la propiedad de capAlt que es random para la altura de la cap dentro de los rangos dados por el usuario
+            self.capAlt = self:getRandomNumber(self.minAlt, self.maxAlt) * 0.3048 -- Convertir la altitud de pies a metros
+
             if self.airbone then
                 self:teleportToCapAltitude()
-
             else
                 self:capDispatcher()
             end
@@ -119,35 +116,26 @@ end
 
 -- Método para respawnear a las unidad que son airbone a la altura de la cap
 function simpleCap:teleportToCapAltitude()
-
-    local altitudeFeet = self.capAlt -- Altitud aleatoria en pies
-    local altitudeMeters = altitudeFeet * 0.3048 -- Convertir la altitud de pies a metros
-
     -- Obtener las coordenadas actuales del grupo con respecto al líder
-
     local currentPosition = mist.getLeadPos(self.name)
     -- Actualizar las coordenadas con la nueva altura
-
     local newPosition = {
         x = currentPosition.x,
-        y = altitudeMeters,
+        y = self.capAlt,
         z = currentPosition.z
     }
-
     -- Parámetros para el teletransporte con la nueva altura
     local teleportParams = {
         groupName = self.name,
         point = newPosition, -- Nuevas coordenadas con la nueva altura
         action = "respawn" -- Acción de teletransporte
     }
-
     -- Teletransportar el grupo y obtener el nombre del grupo teletransportado
     local groupNameTeleported = mist.teleportToPoint(teleportParams)
     if self.debug then
-        debug_msg("Grupo " .. self.name .. " reapwneado a altitud asginada por config de: " .. self.capAlt)
+        debug_msg("Grupo " .. self.name .. " respawneado a altitud asginada en metros de: " .. self.capAlt)
     end
     self:capDispatcher()
-
 end
 
 -- Función capDispatcher que llama la funciones de giveOrdersToGroup al inicio del script en main y posteriormete en respawn
@@ -174,11 +162,7 @@ function simpleCap:giveOrdersToGroup()
 
         if zone and zoneCoordinates then
             local zoneRadius = zone.radius
-
-            -- Calcular la velocidad máxima para la eficiencia en función de la altitud
-            local altitudeMeters = self.capAlt * 0.3048
-            local speed = self:maxEfficiencySpeed(altitudeMeters)
-
+            local speed = self:maxEfficiencySpeed()
             -- Determinar las coordenadas de inicio y fin del racetrack
             local racetrackCoordinates = self:getRacetrackCoordinates(zoneCoordinates, zoneRadius)
 
@@ -190,15 +174,14 @@ function simpleCap:giveOrdersToGroup()
                     point = racetrackCoordinates.start,
                     point2 = racetrackCoordinates.finish,
                     speed = speed,
-                    altitude = altitudeMeters,
+                    altitude = self.capAlt,
                     altitudeMode = 'BARO'
                 }
             }
-
             -- Asignar la tarea al grupo
             local controller = group:getController()
             controller:setTask(task)
-            controller:setAltitude(altitudeMeters, true, "BARO")
+            controller:setAltitude(self.capAlt, true, "BARO")
             if self.debug then
                 debug_msg("Órdenes asignadas al grupo: " .. self.name)
             end
@@ -411,9 +394,8 @@ function simpleCap:getZoneCoordinates(zoneName)
 end
 
 -- Función para establecer de forma muy general una velocidad dependiendo de la altura de la orbita de la cap para ahorrar combustible
-function simpleCap:maxEfficiencySpeed(altitude)
-
-    local altitudeFeet = altitude * 3.28084 -- Convertir la altitud de metros a pies --- SOLUCIÓN PROVISIONAL PARA BUG ALEATORIA ALTURA
+function simpleCap:maxEfficiencySpeed()
+    local altitudeFeet = self.capAlt * 3.28084 -- Convertir la altitud de metros a pies --- SOLUCIÓN PROVISIONAL PARA BUG ALEATORIA ALTURA
     local speed
     local mach
     -- Convertir altitud a mach
