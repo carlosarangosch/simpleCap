@@ -1,4 +1,6 @@
 -- Notas desarrollo: 
+-- Arreglar bug marcas de detección cap no desaparecen cuando muere el grupo cap
+-- añadir chequeo si el grupo existe en métodos
 -- Agregar FSM - Finite State Machine
 -- Agregar distancia de engagement 
 -- Agregar lógica para tanquer
@@ -12,6 +14,7 @@ local simpleCapGroups = {{
     extraLives = 1,
     minAlt = 5000,
     maxAlt = 10000,
+    detectionRadius = 20000,
     debug = true
 }, {
     name = "cap2",
@@ -21,6 +24,7 @@ local simpleCapGroups = {{
     extraLives = 1,
     minAlt = 9000,
     maxAlt = 10000,
+    detectionRadius = 20000,
     debug = true
 }, {
     name = "cap3",
@@ -30,6 +34,7 @@ local simpleCapGroups = {{
     extraLives = -1,
     minAlt = 20000,
     maxAlt = 25000,
+    detectionRadius = 20000,
     debug = true
 }}
 
@@ -45,15 +50,11 @@ end
 -- Tabla para guardar las instancias que se van creando
 local simpleCapInstances = {}
 
-simpleCap = {
-    state = {
-        patrolling = "patrolling",
-        awaiting_respawn = false,
-        attacking = "attacking",
-        logic_ended = false
-        -- Agrega más estados según sea necesario
-    }
-}
+-- Tabla para guardar las IDs de las marcas para debug de zona de detección en scanForEnemyAircraft
+
+local allDebugMarks = {}
+
+simpleCap = {}
 
 simpleCap_mt = {
     __index = simpleCap
@@ -69,7 +70,22 @@ function simpleCap:new(group)
         extraLives = group.extraLives,
         minAlt = group.minAlt,
         maxAlt = group.maxAlt,
-        debug = group.debug
+        detectionRadius = group.detectionRadius,
+        debug = group.debug,
+        debugMarks = {},
+        state = {
+            task = "idle",
+            awaiting_respawn = false,
+            logic_ended = false
+            -- Agregar más estados según sea necesario
+
+            --[[
+            Posible task state
+            idle
+            patrolling
+            attacking
+        --]]
+        }
     }
     setmetatable(newCapGroup, simpleCap_mt)
     simpleCapInstances[group.name] = newCapGroup -- Almacena la instancia en simpleCapInstances para poder acceder en los eventHandler
@@ -100,7 +116,6 @@ function simpleCap:Init()
             else
                 self:capDispatcher()
             end
-
         else
             if self.debug then
                 debug_msg("No se encontraron unidades para el grupo: " .. self.name)
@@ -112,6 +127,145 @@ function simpleCap:Init()
         end
     end
 
+end
+
+-- FSM Main bucle manejador de espectadores
+
+function simpleCap:FSM()
+    local execTime = 30 -- Tiempo en segundos antes de que se ejecute la función nuevamente
+    local function checkState()
+        if self.debug then
+            debug_msg("Grupo: " .. self.name .. " tarea actual " .. self.state.task)
+        end
+
+        local inAir = self:InAir()
+
+        if inAir and not self.state.logic_ended then
+            if self.state.task == "patrolling" then
+
+                -- Si está en el aire y la lógica está activa y la tarea es patrolling
+
+                self:scanForEnemyAircraft()
+
+            elseif self.state.task ~= "patrolling" and self.state.task ~= "attacking" then
+                -- Si está en el aire y la lógica está activa y la tarea no es patrolling
+                self.state.task = "patrolling"
+                self:setPatrol()
+            end
+        end
+
+        if not self.state.logic_ended and not self.state.awaiting_respawn then
+            -- cuando el grupo muere - está esperando respawnear o la lógica se apaga se rompe el bucle
+            mist.scheduleFunction(checkState, {}, timer.getTime() + execTime) -- Programar la ejecución de la función nuevamente
+        end
+    end
+
+    local groupName = Group.getByName(self.name)
+
+    if groupName and groupName:isExist() then
+        -- Iniciar el bucle por primera vez
+        mist.scheduleFunction(checkState, {}, timer.getTime() + execTime)
+    else
+        if self.debug then
+            debug_msg("Grupo no encontrado al ejecutar FSM(): " .. self.name)
+        end
+    end
+end
+
+-- Método para resetear estados
+
+function simpleCap:stateReset()
+    self.state = {
+        task = "idle",
+        awaiting_respawn = false,
+        logic_ended = false
+    }
+end
+
+-- Método para chequear si grupo está volando o en tierra
+function simpleCap:InAir()
+    local groupName = Group.getByName(self.name) -- Obtener el grupo por su nombre
+    local allInAir = true
+    if groupName and groupName:isExist() then
+        for _, unit in pairs(groupName:getUnits()) do
+            if not unit:inAir() then
+                allInAir = false
+                break
+            end
+        end
+        if allInAir then
+            if self.debug then
+                debug_msg("Grupo: " .. self.name .. " en aire")
+            end
+            return true
+        else
+            debug_msg("Grupo: " .. self.name .. " en tierra")
+            return false
+        end
+    else
+        if self.debug then
+            debug_msg("Grupo no encontrado al ejecutar InAir(): " .. self.name)
+        end
+        return false
+    end
+end
+
+-- Método para generar un id automático no replicado de debugMarks para scanForEnemyAircraft
+function simpleCap:generateMarkID()
+    local id = 1
+    if #allDebugMarks > 0 then
+        id = allDebugMarks[#allDebugMarks] + 1
+    end
+    table.insert(allDebugMarks, id)
+    return id
+end
+
+-- Método para detecta aviones enemigos cercados al grupoCap
+function simpleCap:scanForEnemyAircraft()
+
+    local groupName = Group.getByName(self.name)
+
+    if groupName and groupName:isExist() then
+        local capUnitLeadPosition = mist.getLeadPos(groupName)
+
+        local foundUnits = {}
+        local markID = self:generateMarkID() -- Generar un nuevo ID de marca
+        trigger.action.circleToAll(-1, markID, capUnitLeadPosition, self.detectionRadius, {1, 0, 0, 0.5},
+            {1, 0, 0, 0.5}, 1, false)
+
+        -- Almacenar el ID de la marca en la tabla de la instancia actual
+        table.insert(self.debugMarks, markID)
+
+        local searchVolume = {
+            ["id"] = world.VolumeType.SPHERE,
+            ["params"] = {
+                ["point"] = capUnitLeadPosition,
+                ["radius"] = self.detectionRadius
+            }
+        }
+        -- search the volume for an object category
+        world.searchObjects(Object.Category.UNIT, searchVolume, function(obj)
+            local detectedGroup = obj:getGroup():getName()
+            trigger.action.outText("Grupo encontrado por " .. self.name .. " " .. detectedGroup, 5)
+            foundUnits[#foundUnits + 1] = obj
+        end)
+
+        if #self.debugMarks > 1 then
+            for i, mark in ipairs(allDebugMarks) do
+                if mark == self.debugMarks[1] then
+                    trigger.action.removeMark(self.debugMarks[1])
+                    table.remove(self.debugMarks, 1)
+                    table.remove(allDebugMarks, i)
+                    break
+                end
+            end
+        end
+
+    else
+        if self.debug then
+            debug_msg("Grupo no encontrado al ejecutar scanForEnemyAircraft(): " .. self.name)
+        end
+    end
 end
 
 -- Método para respawnear a las unidad que son airbone a la altura de la cap
@@ -138,13 +292,13 @@ function simpleCap:teleportToCapAltitude()
     self:capDispatcher()
 end
 
--- Función capDispatcher que llama la funciones de giveOrdersToGroup al inicio del script en main y posteriormete en respawn
+-- Función capDispatcher que llama la funciones FSM y capDifficultyConfig
 
 function simpleCap:capDispatcher()
     -- Definir la función interna que ejecutará las acciones después del retraso
     local function delayedActions()
-        self:giveOrdersToGroup()
         self:capDifficultyConfig()
+        self:FSM()
     end
     -- Definir el tiempo de retraso en segundos
     local delayInSeconds = 5 -- Aquí puedes ajustar el tiempo de retraso según tus necesidades
@@ -153,7 +307,7 @@ function simpleCap:capDispatcher()
 end
 
 -- Función para dar órdenes a un grupo de aviones para hacer una órbita de tipo "racetrack" en una zona
-function simpleCap:giveOrdersToGroup()
+function simpleCap:setPatrol()
     local group = Group.getByName(self.name)
     if group and group:isExist() then
         local zoneName = self.zones[math.random(1, #self.zones)]
@@ -183,7 +337,7 @@ function simpleCap:giveOrdersToGroup()
             controller:setTask(task)
             controller:setAltitude(self.capAlt, true, "BARO")
             if self.debug then
-                debug_msg("Órdenes asignadas al grupo: " .. self.name)
+                debug_msg("Patrolling asgignado al grupo: " .. self.name .. " en la zona " .. zoneName)
             end
         else
             if self.debug then
@@ -216,7 +370,7 @@ function simpleCap:handleRespawn()
                 if self.debug then
                     debug_msg("Grupo respawned: " .. self.name .. ". Vidas restantes: " .. self.extraLives)
                 end
-                self.state.awaiting_respawn = false
+                self:stateReset()
                 return nil
             elseif self.extraLives <= -1 then
                 if self.airbone then
@@ -229,7 +383,7 @@ function simpleCap:handleRespawn()
                 if self.debug then
                     debug_msg("Grupo respawned: " .. self.name .. ". debido a Vidas infinitas")
                 end
-                self.state.awaiting_respawn = false
+                self:stateReset()
                 return nil
             else
                 if self.debug then
@@ -323,8 +477,12 @@ function simpleCap:cleanUp()
         debug_msg("Instancia eliminada para " .. self.name)
     end
     if self.debug then
-        debug_msg("CleanUP finalizado para " .. self.name)
+
+        debug_msg("CleanUP borrando todas las marcas para " .. self.name)
     end
+    if self.debug then
+        debug_msg("CleanUP finalizado para " .. self.name)
+    end    
 end
 
 ------ METODOS DE GENERALES Y FUNCIONES GENERALES
