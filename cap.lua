@@ -1,4 +1,5 @@
 -- Notas desarrollo: 
+-- Detectar automáticamente si está airbone
 -- Arreglar bug marcas de detección cap no desaparecen cuando muere el grupo cap
 -- añadir chequeo si el grupo existe en métodos
 -- Agregar FSM - Finite State Machine
@@ -12,28 +13,28 @@ local simpleCapGroups = {{
     difficulty = "easy",
     airbone = true,
     extraLives = 1,
-    minAlt = 5000,
-    maxAlt = 10000,
+    minAlt = 10000,
+    maxAlt = 18000,
     detectionRadius = 20000,
     debug = true
 }, {
     name = "cap2",
     zones = {"Zone2"},
-    difficulty = "passive",
+    difficulty = "easy",
     airbone = true,
     extraLives = 1,
-    minAlt = 9000,
-    maxAlt = 10000,
+    minAlt = 10000,
+    maxAlt = 15000,
     detectionRadius = 20000,
     debug = true
 }, {
     name = "cap3",
     zones = {"Zone3"},
-    difficulty = "hard",
+    difficulty = "easy",
     airbone = false,
     extraLives = -1,
-    minAlt = 20000,
-    maxAlt = 25000,
+    minAlt = 15000,
+    maxAlt = 20000,
     detectionRadius = 20000,
     debug = true
 }}
@@ -482,7 +483,7 @@ function simpleCap:cleanUp()
     end
     if self.debug then
         debug_msg("CleanUP finalizado para " .. self.name)
-    end    
+    end
 end
 
 ------ METODOS DE GENERALES Y FUNCIONES GENERALES
@@ -577,7 +578,13 @@ end
 
 -- Funcion para manejar el evento de aterrizaje y eliminar la unidad
 local function landingEventHandler(event)
-    if event.id == world.event.S_EVENT_LAND then
+    if event.id == world.event.S_EVENT_LAND and event.initiator ~= nil then
+
+        -- Verificar si el event.initiator es un jugador o nil y salta esta ejecución
+        if event.initiator:getPlayerName() or event.initiator == nil then
+            return -- Salir de la función si el event.initiator es un jugador
+        end
+
         debug_msg("Se produjo un evento LAND, verificando...")
         local landedUnitGroup = event.initiator:getGroup():getName()
         -- Verificar si el grupo que aterrizó es el grupo de cap
@@ -597,6 +604,12 @@ end
 local function deadEventHandler(event)
     if (event.id == world.event.S_EVENT_CRASH or event.id == world.event.S_EVENT_DEAD or event.id ==
         world.event.S_EVENT_UNIT_LOST) and event.initiator ~= nil then
+
+        -- Verificar si el event.initiator es un jugador o nil y salta esta ejecución
+        if event.initiator:getPlayerName() or event.initiator == nil then
+            return -- Salir de la función si el event.initiator es un jugador
+        end
+
         local deadUnitGroup = event.initiator:getGroup():getName()
         local instance = simpleCapInstances[deadUnitGroup]
         -- Verificar si la unidad que se estrelló o murió pertener al grupo de cap
